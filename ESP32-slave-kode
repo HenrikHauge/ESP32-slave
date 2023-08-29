@@ -1,0 +1,82 @@
+#include <Wire.h>
+
+#define MASTER_ADDRESS 0x08 // I2C-adresse for ESP32 Master
+#define SENSOR_PIN 2 // For Ir - mottaker 
+
+unsigned long lastDetectionTime = 0; // Variabel for å lagre tidspunktet for siste deteksjon
+unsigned long detectionDelay = 1000; // Tidsforsinkelse på 1 sekund, for å unngå flere registreringer på samme bevegelse
+
+int pwmChannel = 0; // Velger kanal 0
+int frequence = 38000; // PWM-frekvens på 38 kHz
+int resolution = 8; // 8-bit oppløsning, 256 mulige verdier
+int pwmPin = 4; // For ir - diode
+
+boolean lastSensorState = false; // Variabel som indikerer gjennomgangen av sensorene 
+boolean kitchenDetected = false; // Variabel som holder styr på om "Kjøkken" allerede er printet
+boolean startupDone = false; // Variabel som indikerer om oppstartsforsinkelsen (for å la systemet stabiliserer seg) er ferdig
+
+void setup() 
+{
+  Serial.begin(9600);
+
+  Wire.begin(); // Initialiser I2C
+ 
+  pinMode(18, OUTPUT); // Setter pin 18 som output 
+  pinMode(SENSOR_PIN, INPUT_PULLUP); // Sensoren som en inngang med pull-up motstand 
+
+  digitalWrite(18, HIGH); // Pin 18 til høy, for å kunne bruke den som en spenningskilde
+
+  attachInterrupt(digitalPinToInterrupt(SENSOR_PIN), sensorTriggerd, FALLING); // Setter en interrupt til sensoren. Den vil kalle funksjonen "sensorTriggerd" når det oppdages en lav til høy overgang.
+  ledcSetup(pwmChannel, frequence, resolution); 
+  ledcAttachPin(pwmPin, pwmChannel); 
+  ledcWrite(pwmChannel, 127); // utgangsspenningen til 1.65 V
+  
+  
+  delay(1000); // Oppstartsforsinkelse på 1 sekunder for å la systemet stabiliseres
+  startupDone = true; // Setter flagget til true etter oppstartsforsinkelsen
+}
+
+void sensorTriggerd()
+{
+  // Sjekker om oppstartsforsinkelsen er ferdig
+  if (startupDone)
+  {
+    // Sjekker om det har gått nok tid siden siste deteksjon
+    unsigned long current_time = millis();
+    if (current_time - lastDetectionTime >= detectionDelay)
+    {
+      lastDetectionTime = current_time; // Oppdater tidspunktet for siste deteksjon
+      lastSensorState = true; // Setter flagget til true etter oppstartsforsinkelsen, for å sjekke sensorene
+    }
+  }
+}
+
+void sendData(int movement) 
+{
+  Wire.beginTransmission(MASTER_ADDRESS); // Start I2C-overføring til ESP32 Slave
+  Wire.write(movement); // Send bevegelses data til ESP32 Master
+  Wire.endTransmission(); // Avslutt I2C-overføring
+}
+
+void loop() 
+{
+  // Sjekker om triggingen av sensoren gikk gjennom, "tidstesten"
+  if (lastSensorState)
+  {
+    // Om det sist IKKE ble printet "Kjøkken"
+    if (!kitchenDetected)
+    {
+      Serial.println("Kjøkken");
+      sendData(0); // Kjør funksjonen, og send 0 til Master
+      kitchenDetected = true; // Sett flagget til true for å indikere at "Kjøkken" er sagt
+    }
+    else
+    {
+      Serial.println("Stue");
+      sendData(1); // Kjør funksjonen, og send 1 til Master
+      kitchenDetected = false; // Sett flagget tilbake for å indikere at "Stue" er sagt
+    }
+    lastSensorState = false; // Sett flagget tilbake for å indikere at gjennomgangen av sensorene er ferdig
+  }
+}
+
